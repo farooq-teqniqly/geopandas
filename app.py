@@ -26,7 +26,6 @@ world = geopandas.read_file(geopandas.datasets.get_path("naturalearth_lowres"))
 
 # We restrict to South America.
 world = world[world.continent == "South America"]
-#world["gdp_per_cap"] = world.gdp_md_est / world.pop_est
 world["gdp_per_cap_mean"] = world.loc[:, "gdp_md_est"].mean()
 world["gdp_per_cap_stdev"] = world.loc[:, "gdp_md_est"].std()
 world["gdp_per_cap_z_score"] = (world.gdp_md_est - world.gdp_per_cap_mean) / world.gdp_per_cap_stdev
