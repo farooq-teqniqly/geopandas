@@ -1,97 +1,82 @@
 import matplotlib.pyplot as plt
-import geopandas
+import geopandas as gp
+import pandas as pd
 import os
 
 from geopandas import GeoDataFrame
-from pyspark.sql import SparkSession, DataFrame
-from pyspark.sql.functions import regexp_replace, col, trim
 
 
-def load_county_geo_data_file(shape_file: str) -> GeoDataFrame:
-    return geopandas.read_file(shape_file)
+def get_county_df(state_name: str, census_data_file: str, shape_file: str) -> GeoDataFrame:
+    if not state_name:
+        raise ValueError("Provide a state name.")
+
+    if not census_data_file:
+        raise ValueError("Provide the path to the census data file.")
+
+    if not shape_file:
+        raise ValueError("Provide the path to the shape file.")
+
+    census_df = pd.read_csv(census_data_file, header=0, encoding="ISO-8859-1")
+
+    census_df = census_df.loc[
+        (census_df["COUNTY"] != 0) & (census_df["STNAME"] == state_name), ["COUNTY", "STATE", "CENSUS2010POP",
+                                                                           "POPESTIMATE2019"]]
+
+    census_df.rename(columns={"COUNTY": "COUNTYFP", "STATE": "STATEFP"}, inplace=True)
+    fips_code = census_df.iat[0, 1]
+
+    census_df = z_score(census_df, "CENSUS2010POP")
+
+    geo_data_frame = gp.read_file(shape_file)
+    geo_data_frame = geo_data_frame.astype({"STATEFP": int}).astype({"COUNTYFP": int})
+    geo_data_frame = geo_data_frame.loc[geo_data_frame["STATEFP"] == fips_code]
+    geo_data_frame = pd.merge(geo_data_frame, census_df, on=["STATEFP", "COUNTYFP"])
+
+    return geo_data_frame
 
 
-def load_county_census_data_file(path, spark: SparkSession) -> DataFrame:
-    return spark.read.csv(path, header=True, inferSchema=True)
+def z_score(df, col_name):
+    mean = df.loc[:, col_name].mean()
+    stdev = df.loc[:, col_name].std()
 
-
-def plot_counties():
-    data_folder = os.path.join(os.getcwd(), "data", "tl_2017_us_county")
-    shape_file = os.path.join(data_folder, "tl_2017_us_county.shp")
-
-    county_gdf = geopandas.read_file(shape_file)
-    wa_counties_gdf = county_gdf[county_gdf.STATEFP == "53"]
-    wa_counties_gdf.plot()
-    plt.show()
-
-
-def plot_south_america(spark: SparkSession):
-    rows = [
-        ("Buenos Aires", "Argentina", -34.58, -58.66),
-        ("Brasilia", "Brazil", -15.78, -47.91),
-        ("Santiago", "Chile", -33.45, -70.66),
-        ("Bogota", "Colombia", 4.60, -74.08),
-        ("Caracas", "Venezuela", 10.48, -66.86),
-    ]
-
-    cols = ["City", "Country", "Latitude", "Longitude"]
-
-    df = spark.createDataFrame(rows, cols)
-
-    pdf = df.toPandas()
-
-    gdf = geopandas.GeoDataFrame(
-        pdf, geometry=geopandas.points_from_xy(pdf.Longitude, pdf.Latitude)
-    )
-
-    world = geopandas.read_file(geopandas.datasets.get_path("naturalearth_lowres"))
-
-    # We restrict to South America.
-    world = world[world.continent == "South America"]
-    world["gdp_per_cap_mean"] = world.loc[:, "gdp_md_est"].mean()
-    world["gdp_per_cap_stdev"] = world.loc[:, "gdp_md_est"].std()
-    world["gdp_per_cap_z_score"] = (
-        world.gdp_md_est - world.gdp_per_cap_mean
-    ) / world.gdp_per_cap_stdev
-
-    ax = world.plot(
-        column="gdp_per_cap_z_score", legend=True, cmap="tab20b", edgecolor="white"
-    )
-
-    # We can now plot our ``GeoDataFrame``.
-    gdf.plot(ax=ax, color="red")
-
-    plt.show()
-
-def munge_county_census_data_set(df: DataFrame) -> DataFrame:
-    df = df.select("STNAME", "CTYNAME", "CENSUS2010POP", "POPESTIMATE2019").where(
-        "COUNTY <> 0"
-    )
-
-    df = df.withColumn("CTYNAME", trim(regexp_replace(col("CTYNAME"), "County", "")))
-
-    df = df.withColumnRenamed("STNAME", "STATE").withColumnRenamed(
-        "CTYNAME", "COUNTY"
-    )
+    df[f"ZSCORE_{col_name}"] = (df[col_name] - mean) / stdev
 
     return df
 
 def main():
-    spark = SparkSession.builder.master("local[*]").appName("geo-app").getOrCreate()
+    state_name = input("Enter a state: ")
+
+    if not state_name:
+        state_name = "Washington"
 
     data_folder = os.path.join(os.getcwd(), "data")
-
     census_file = os.path.join(data_folder, "co-est2019-alldata.csv")
-    cdf: DataFrame = load_county_census_data_file(census_file, spark)
-    cdf = munge_county_census_data_set(cdf)
-    assert cdf.count() == 3142
 
     geo_data_folder = os.path.join(data_folder, "tl_2017_us_county")
     shape_file = os.path.join(geo_data_folder, "tl_2017_us_county.shp")
 
-    gdf: GeoDataFrame = load_county_geo_data_file(shape_file)
-    gdf_spark = spark.createDataFrame(gdf).select("NAME", "STATEFP")
-    assert gdf_spark.count() == 3233
+    geo_data_frame = get_county_df(state_name, census_file, shape_file)
+    geo_data_frame = geo_data_frame.to_crs(epsg=3857)
+
+    geo_data_frame["center"] = geo_data_frame["geometry"].centroid
+    geo_data_frame_points = geo_data_frame.copy()
+    geo_data_frame_points.set_geometry("center", inplace=True)
+
+    geo_data_frame['coords'] = geo_data_frame['geometry'].apply(lambda x: x.representative_point().coords[:])
+    geo_data_frame['coords'] = [coords[0] for coords in geo_data_frame['coords']]
+
+    plot_col = "ZSCORE_CENSUS2010POP"
+    cmap = "Oranges"
+
+    fig, ax = plt.subplots(1, figsize=(30, 10))
+    geo_data_frame.plot(column=plot_col, cmap=cmap, linewidth=0.8, ax=ax, edgecolor="0.8", legend=True)
+    ax.axis("off")
+
+    for idx, row in geo_data_frame.iterrows():
+        plt.text(row.coords[0], row.coords[1], s=row["NAME"], horizontalalignment='center')
+
+    plt.show()
+
 
 if __name__ == "__main__":
     main()
