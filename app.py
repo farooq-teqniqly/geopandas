@@ -1,5 +1,3 @@
-import math
-
 import matplotlib.pyplot as plt
 import geopandas as gp
 import pandas as pd
@@ -25,8 +23,9 @@ def get_county_df(state_name: str, census_data_file: str, shape_file: str) -> Ge
                                                                            "POPESTIMATE2019"]]
 
     census_df.rename(columns={"COUNTY": "COUNTYFP", "STATE": "STATEFP"}, inplace=True)
-
     fips_code = census_df.iat[0, 1]
+
+    census_df = z_score(census_df, "CENSUS2010POP")
 
     geo_data_frame = gp.read_file(shape_file)
     geo_data_frame = geo_data_frame.astype({"STATEFP": int}).astype({"COUNTYFP": int})
@@ -35,6 +34,14 @@ def get_county_df(state_name: str, census_data_file: str, shape_file: str) -> Ge
 
     return geo_data_frame
 
+
+def z_score(df, col_name):
+    mean = df.loc[:, col_name].mean()
+    stdev = df.loc[:, col_name].std()
+
+    df[f"ZSCORE_{col_name}"] = (df[col_name] - mean) / stdev
+
+    return df
 
 def main():
     state_name = input("Enter a state: ")
@@ -58,7 +65,7 @@ def main():
     geo_data_frame['coords'] = geo_data_frame['geometry'].apply(lambda x: x.representative_point().coords[:])
     geo_data_frame['coords'] = [coords[0] for coords in geo_data_frame['coords']]
 
-    plot_col = "POPESTIMATE2019"
+    plot_col = "ZSCORE_CENSUS2010POP"
     cmap = "Oranges"
 
     fig, ax = plt.subplots(1, figsize=(30, 10))
