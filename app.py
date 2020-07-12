@@ -1,3 +1,5 @@
+import math
+
 import matplotlib.pyplot as plt
 import geopandas as gp
 import pandas as pd
@@ -47,8 +49,25 @@ def main():
     shape_file = os.path.join(geo_data_folder, "tl_2017_us_county.shp")
 
     geo_data_frame = get_county_df(state_name, census_file, shape_file)
+    geo_data_frame = geo_data_frame.to_crs(epsg=3857)
 
-    geo_data_frame.plot(edgecolor="black", column="CENSUS2010POP", legend=True)
+    geo_data_frame["center"] = geo_data_frame["geometry"].centroid
+    geo_data_frame_points = geo_data_frame.copy()
+    geo_data_frame_points.set_geometry("center", inplace=True)
+
+    geo_data_frame['coords'] = geo_data_frame['geometry'].apply(lambda x: x.representative_point().coords[:])
+    geo_data_frame['coords'] = [coords[0] for coords in geo_data_frame['coords']]
+
+    plot_col = "POPESTIMATE2019"
+    cmap = "Oranges"
+
+    fig, ax = plt.subplots(1, figsize=(30, 10))
+    geo_data_frame.plot(column=plot_col, cmap=cmap, linewidth=0.8, ax=ax, edgecolor="0.8", legend=True)
+    ax.axis("off")
+
+    for idx, row in geo_data_frame.iterrows():
+        plt.text(row.coords[0], row.coords[1], s=row["NAME"], horizontalalignment='center')
+
     plt.show()
 
 
